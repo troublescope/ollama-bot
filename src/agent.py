@@ -34,12 +34,24 @@ _agent: Any = None
 _llm_vision: ChatOllama | None = None
 
 
+def _create_llm(**kwargs) -> ChatOllama:
+    """Helper to create a ChatOllama instance with optional cloud auth headers."""
+    client_kwargs = {}
+    if CONFIG.ollama_api_key:
+        client_kwargs["headers"] = {"Authorization": f"Bearer {CONFIG.ollama_api_key}"}
+
+    return ChatOllama(
+        model=CONFIG.ollama_model,
+        base_url=CONFIG.ollama_host,
+        client_kwargs=client_kwargs,
+        **kwargs
+    )
+
+
 def get_agent() -> Any:
     global _agent
     if _agent is None:
-        llm = ChatOllama(
-            model=CONFIG.ollama_model,
-            base_url=CONFIG.ollama_host,
+        llm = _create_llm(
             reasoning=False,
             temperature=0.8,
             # num_ctx=4096: with 8192 the KV cache on qwen3.5:4b asks for
@@ -67,9 +79,7 @@ def get_vision_llm() -> ChatOllama:
     """
     global _llm_vision
     if _llm_vision is None:
-        _llm_vision = ChatOllama(
-            model=CONFIG.ollama_model,
-            base_url=CONFIG.ollama_host,
+        _llm_vision = _create_llm(
             reasoning=False,
             temperature=0.8,
             num_ctx=4096,
@@ -202,9 +212,7 @@ def _get_extract_llm() -> ChatOllama:
     """Minimal dedicated LLM for fact extraction (low num_predict for speed)."""
     global _llm_extract
     if _llm_extract is None:
-        _llm_extract = ChatOllama(
-            model=CONFIG.ollama_model,
-            base_url=CONFIG.ollama_host,
+        _llm_extract = _create_llm(
             reasoning=False,
             temperature=0.2,
             num_ctx=2048,

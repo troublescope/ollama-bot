@@ -74,6 +74,28 @@ On more powerful hardware (laptop with GPU, x86 server) performance scales linea
 - systemd (for persistent deployment)
 - git, curl
 
+### Ollama Cloud Support (Optional)
+The bot supports both local Ollama and Ollama Cloud. 
+
+#### Option A: Direct Cloud Access (no local server)
+If you don't want to run a local Ollama server, you can point the bot directly to the cloud:
+1. Register at [ollama.com](https://ollama.com) and get an API key.
+2. Edit your `.env`:
+   ```env
+   OLLAMA_HOST=https://ollama.com
+   OLLAMA_API_KEY=your_key_here
+   OLLAMA_MODEL=gpt-oss:120b-cloud  # or any cloud model
+   ```
+
+#### Option B: Local Proxy Mode
+You can run a local Ollama server that offloads specific models to the cloud:
+1. `ollama pull gpt-oss:120b-cloud`
+2. Keep `.env` pointing to your local host (default):
+   ```env
+   OLLAMA_HOST=http://localhost:11434
+   OLLAMA_MODEL=gpt-oss:120b-cloud
+   ```
+
 ---
 
 ## Step-by-step setup

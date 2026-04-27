@@ -29,6 +29,7 @@ class Config:
     allowed_chat_id: int
     ollama_host: str
     ollama_model: str
+    ollama_api_key: str | None
     ollama_keep_alive: str
     db_path: Path
     persona_file: Path
@@ -61,6 +62,7 @@ CONFIG = Config(
     allowed_chat_id=int(_require("ALLOWED_CHAT_ID")),
     ollama_host=os.getenv("OLLAMA_HOST", "http://localhost:11434"),
     ollama_model=os.getenv("OLLAMA_MODEL", "qwen3.5:4b"),
+    ollama_api_key=os.getenv("OLLAMA_API_KEY"),
     ollama_keep_alive=os.getenv("OLLAMA_KEEP_ALIVE", "24h"),
     db_path=ROOT / os.getenv("DB_PATH", "./data/chatbot.db"),
     persona_file=ROOT / os.getenv("PERSONA_FILE", "./config/persona.yaml"),
