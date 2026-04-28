@@ -54,15 +54,10 @@ def get_agent() -> Any:
         llm = _create_llm(
             reasoning=False,
             temperature=0.8,
-            # num_ctx=4096: with 8192 the KV cache on qwen3.5:4b asks for
-            # 5.5 GiB and on a Pi 5 8GB we're right at the edge — any small
-            # extra RAM pressure (pic_flow, voice transcription, etc.)
-            # triggers OOM on the next /chat. 4096 -> ~4.2 GiB, healthy
-            # margin. The default HISTORY_WINDOW=6 + system prompt fits
-            # comfortably within 4096 tokens.
             num_ctx=4096,
             num_predict=150,
             keep_alive=CONFIG.ollama_keep_alive,
+            streaming=True,
         )
         _agent = create_react_agent(model=llm, tools=ALL_TOOLS)
         log.info(
@@ -85,6 +80,7 @@ def get_vision_llm() -> ChatOllama:
             num_ctx=4096,
             num_predict=180,
             keep_alive=CONFIG.ollama_keep_alive,
+            streaming=True,
         )
         log.info("Vision LLM ready (direct, no ReAct)")
     return _llm_vision
@@ -187,6 +183,35 @@ async def generate_reply(
     return final_text or "..."
 
 
+async def stream_reply(
+    user_text: str,
+    history: list[dict] | None = None,
+    facts: list[str] | None = None,
+    summary: str | None = None,
+    daily_mood: dict | None = None,
+    intimacy_count: int | None = None,
+    events: list[dict] | None = None,
+):
+    """Yield text chunks via ReAct agent streaming."""
+    agent = get_agent()
+    system = _build_system_prompt(
+        facts or [], summary, with_tools=True,
+        daily_mood=daily_mood, intimacy_count=intimacy_count,
+        events=events,
+    )
+    msgs: list[BaseMessage] = [SystemMessage(content=system)]
+    msgs.extend(_history_to_messages(history or []))
+    msgs.append(HumanMessage(content=user_text))
+
+    log.debug("Agent stream request: msgs=%d user=%r", len(msgs), user_text)
+
+    async for chunk in agent.astream({"messages": msgs}, stream_mode="messages"):
+        msg, metadata = chunk
+        if isinstance(msg, AIMessage) and not msg.tool_calls:
+            if isinstance(msg.content, str) and msg.content:
+                yield msg.content
+
+
 FACT_EXTRACTION_SYSTEM = """You are a fact extractor. Analyze the user's message \
 and identify ONLY important long-term personal information about the sender:
 - name, age, job, where they live
@@ -266,12 +291,7 @@ async def generate_vision_reply(
     intimacy_count: int | None = None,
     events: list[dict] | None = None,
 ) -> str:
-    """Photo reply: direct path (no ReAct) to keep latency manageable.
-
-    Does not use history (photos are atomic events) nor tool calls.
-    Includes facts for persona coherence, but keeps context minimal so the
-    image tokens have room.
-    """
+    """Photo reply: direct path (no ReAct) to keep latency manageable."""
     llm = get_vision_llm()
     system = _build_system_prompt(
         facts or [], summary=None,
@@ -294,3 +314,35 @@ async def generate_vision_reply(
     text = (resp.content if isinstance(resp.content, str) else "").strip()
     log.info("Vision reply (%d chars): %s", len(text), text[:120])
     return text or "..."
+
+
+async def stream_vision_reply(
+    caption: str,
+    image_b64: str,
+    facts: list[str] | None = None,
+    daily_mood: dict | None = None,
+    intimacy_count: int | None = None,
+    events: list[dict] | None = None,
+):
+    """Yield chunks for vision reply."""
+    llm = get_vision_llm()
+    system = _build_system_prompt(
+        facts or [], summary=None,
+        daily_mood=daily_mood, intimacy_count=intimacy_count,
+        events=events,
+    )
+
+    text_prompt = caption.strip() if caption else "sending you a photo, tell me what you think"
+    msgs: list[BaseMessage] = [
+        SystemMessage(content=system),
+        HumanMessage(
+            content=[
+                {"type": "text", "text": text_prompt},
+                {"type": "image_url", "image_url": f"data:image/jpeg;base64,{image_b64}"},
+            ]
+        ),
+    ]
+    log.debug("Vision stream request: caption=%r", caption)
+    async for chunk in llm.astream(msgs):
+        if isinstance(chunk.content, str) and chunk.content:
+            yield chunk.content

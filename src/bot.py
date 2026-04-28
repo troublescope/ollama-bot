@@ -15,7 +15,7 @@ from telegram.ext import (
 from PIL import Image
 
 from src.config import CONFIG
-from src.agent import generate_reply, generate_vision_reply, extract_facts
+from src.agent import stream_reply, stream_vision_reply, extract_facts
 from src.memory import Memory, AsyncMemory
 from src.tools import set_memory
 from src.scheduler import maybe_send_autonomous, force_send_autonomous
@@ -827,48 +827,86 @@ async def _process_user_message(
 
     stop = asyncio.Event()
     typing_task = asyncio.create_task(_keepalive_typing(context.bot, msg.chat_id, stop))
+    
+    reply = ""
+    placeholder = None
+    last_update_time = 0.0
+    
     try:
-        reply = await asyncio.wait_for(
-            generate_reply(
-                user_text=user_text,
-                history=history,
-                facts=facts,
-                summary=summary,
-                daily_mood=mood,
-                intimacy_count=count,
-                events=events,
-            ),
-            timeout=900.0,
-        )
-    except asyncio.TimeoutError:
-        log.error("Agent timeout after 900s")
-        reply = "mmh sorry, I got distracted... what were you saying?"
+        async for chunk in stream_reply(
+            user_text=user_text,
+            history=history,
+            facts=facts,
+            summary=summary,
+            daily_mood=mood,
+            intimacy_count=count,
+            events=events,
+        ):
+            reply += chunk
+            now = asyncio.get_event_loop().time()
+            # Update every 1.2s to avoid Telegram rate limits
+            if now - last_update_time > 1.2:
+                if not placeholder:
+                    placeholder = await msg.reply_text(reply + " ▌")
+                else:
+                    try:
+                        await context.bot.edit_message_text(
+                            chat_id=msg.chat_id,
+                            message_id=placeholder.message_id,
+                            text=reply + " ▌"
+                        )
+                    except Exception as e:
+                        log.debug("Stream edit failed: %s", e)
+                last_update_time = now
+        
+        if not reply:
+            reply = "..."
+            
+        # Final update to remove the cursor
+        if placeholder:
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=msg.chat_id,
+                    message_id=placeholder.message_id,
+                    text=reply
+                )
+            except Exception as e:
+                log.debug("Final stream edit failed: %s", e)
+        else:
+            # If it was too fast and never hit the 1.2s mark
+            placeholder = await msg.reply_text(reply)
+
+    except asyncio.CancelledError:
+        raise
     except Exception:
-        log.exception("Agent error")
+        log.exception("Agent error during stream")
         reply = "mmh I'm a bit out of it, try again"
+        if placeholder:
+            await context.bot.edit_message_text(
+                chat_id=msg.chat_id,
+                message_id=placeholder.message_id,
+                text=reply
+            )
+        else:
+            await msg.reply_text(reply)
     finally:
         stop.set()
         await typing_task
 
-    # Decide text vs voice. Voice only if enabled, positive roll, and the
-    # text is not too long (Piper latency is roughly 0.2s per 10 chars).
+    # Decide text vs voice. 
     send_as_voice = (
         CONFIG.voice_enabled
         and len(reply) <= CONFIG.voice_max_chars
         and random.randint(1, 100) <= CONFIG.voice_probability
     )
-    sent_voice = False
     if send_as_voice:
         try:
-            from src.tts import synthesize_opus  # lazy import: no onnxruntime if disabled
+            from src.tts import synthesize_opus
             opus = await synthesize_opus(reply)
             await context.bot.send_voice(chat_id=msg.chat_id, voice=opus)
-            sent_voice = True
             log.info("reply sent as voice (%d chars)", len(reply))
         except Exception:
-            log.exception("voice synthesis/send failed, falling back to text")
-    if not sent_voice:
-        await msg.reply_text(reply)
+            log.exception("voice synthesis/send failed")
 
     # Save the exchange AFTER sending (if send fails, better not to memorize).
     await amem.save_message("user", user_text)
@@ -979,25 +1017,63 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     stop = asyncio.Event()
     typing_task = asyncio.create_task(_keepalive_typing(context.bot, msg.chat_id, stop))
+    
+    reply = ""
+    placeholder = None
+    last_update_time = 0.0
+    
     try:
-        reply = await asyncio.wait_for(
-            generate_vision_reply(
-                caption=caption, image_b64=image_b64, facts=facts,
-                daily_mood=mood, intimacy_count=count, events=events,
-            ),
-            timeout=420.0,  # vision on CPU-only Pi 5 is slow: up to 7 min
-        )
-    except asyncio.TimeoutError:
-        log.error("Vision timeout after 420s")
-        reply = "hold on, looking at it... gimme a sec"
+        async for chunk in stream_vision_reply(
+            caption=caption, image_b64=image_b64, facts=facts,
+            daily_mood=mood, intimacy_count=count, events=events,
+        ):
+            reply += chunk
+            now = asyncio.get_event_loop().time()
+            if now - last_update_time > 1.2:
+                if not placeholder:
+                    placeholder = await msg.reply_text(reply + " ▌")
+                else:
+                    try:
+                        await context.bot.edit_message_text(
+                            chat_id=msg.chat_id,
+                            message_id=placeholder.message_id,
+                            text=reply + " ▌"
+                        )
+                    except Exception as e:
+                        log.debug("Vision stream edit failed: %s", e)
+                last_update_time = now
+        
+        if not reply:
+            reply = "..."
+            
+        if placeholder:
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=msg.chat_id,
+                    message_id=placeholder.message_id,
+                    text=reply
+                )
+            except Exception as e:
+                log.debug("Final vision stream edit failed: %s", e)
+        else:
+            placeholder = await msg.reply_text(reply)
+
+    except asyncio.CancelledError:
+        raise
     except Exception:
         log.exception("Vision error on photo")
         reply = "mmh can't see the image clearly, try again"
+        if placeholder:
+            await context.bot.edit_message_text(
+                chat_id=msg.chat_id,
+                message_id=placeholder.message_id,
+                text=reply
+            )
+        else:
+            await msg.reply_text(reply)
     finally:
         stop.set()
         await typing_task
-
-    await msg.reply_text(reply)
     # Save to DB as text ("[photo]" + optional caption).
     user_log = f"[photo]{' caption: ' + caption if caption else ''}"
     await amem.save_message("user", user_log)
