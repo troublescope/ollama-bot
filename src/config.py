@@ -32,6 +32,7 @@ class Config:
     ollama_model_pro: str
     ollama_api_key: str | None
     ollama_keep_alive: str
+    ollama_models_ordering: list[str]
     db_path: Path
     persona_file: Path
     log_level: str
@@ -66,6 +67,7 @@ CONFIG = Config(
     ollama_model_pro=os.getenv("OLLAMA_MODEL_PRO", os.getenv("OLLAMA_MODEL", "qwen3.5:4b")),
     ollama_api_key=os.getenv("OLLAMA_API_KEY"),
     ollama_keep_alive=os.getenv("OLLAMA_KEEP_ALIVE", "24h"),
+    ollama_models_ordering=[m.strip() for m in os.getenv("OLLAMA_MODELS_ORDERING", "deepseek-v4-flash:cloud,deepseek-v4-pro:cloud,qwen3.6,glm-5.1:cloud,kimi-k2.6:cloud,qwen3-coder-next").split(",") if m.strip()],
     db_path=ROOT / os.getenv("DB_PATH", "./data/chatbot.db"),
     persona_file=ROOT / os.getenv("PERSONA_FILE", "./config/persona.yaml"),
     log_level=os.getenv("LOG_LEVEL", "INFO"),

@@ -1135,6 +1135,13 @@ def build_app() -> Application:
 
     # Autonomous job scheduling.
     interval_s = max(60, CONFIG.autonomous_check_interval_min * 60)
+    
+    # Model discovery job (run once at startup).
+    from src.agent import _fetch_available_models
+    async def fetch_models_job(ctx):
+        await _fetch_available_models()
+    app.job_queue.run_once(fetch_models_job, when=1.0)
+
     # First tick with 5-min delay after startup (let the bot settle).
     app.job_queue.run_repeating(
         _autonomous_tick,

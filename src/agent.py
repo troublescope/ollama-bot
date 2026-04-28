@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import httpx
 from typing import Any
 from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
@@ -42,6 +43,90 @@ You can read files to understand the project, write code, and run it to verify r
 _agent_flash: Any = None
 _agent_pro: Any = None
 _llm_vision: Any = None
+_available_models: list[str] | None = None
+
+
+async def _fetch_available_models() -> list[str]:
+    """Fetch available models from the Ollama or OpenAI-compatible host."""
+    global _available_models
+    if _available_models is not None:
+        return _available_models
+
+    host = CONFIG.ollama_host.rstrip("/")
+    models = []
+    try:
+        async with httpx.AsyncClient() as client:
+            # Try Ollama local tags first
+            try:
+                r = await client.get(f"{host}/api/tags", timeout=5.0)
+                if r.status_code == 200:
+                    data = r.json()
+                    models.extend([m["name"] for m in data.get("models", [])])
+            except Exception:
+                pass
+            
+            # Try OpenAI-compatible models list
+            api_base = host if host.endswith("/v1") else f"{host}/v1"
+            headers = {}
+            if CONFIG.ollama_api_key:
+                headers["Authorization"] = f"Bearer {CONFIG.ollama_api_key}"
+            
+            try:
+                r = await client.get(f"{api_base}/models", headers=headers, timeout=5.0)
+                if r.status_code == 200:
+                    data = r.json()
+                    # data is either a list or {"data": [...]}
+                    model_list = data if isinstance(data, list) else data.get("data", [])
+                    models.extend([m["id"] for m in model_list])
+            except Exception:
+                pass
+    except Exception as e:
+        log.warning("Failed to fetch available models: %s", e)
+    
+    _available_models = list(set(models))
+    log.info("Discovered %d models from %s", len(_available_models), host)
+    return _available_models
+
+
+def _resolve_model(use_pro: bool = False) -> str:
+    """Pick the best model from CONFIG.ollama_models_ordering based on tier.
+    If _available_models is populated, only picks models that actually exist.
+    """
+    global _available_models
+    ordering = CONFIG.ollama_models_ordering
+    forced = CONFIG.ollama_model_pro if use_pro else CONFIG.ollama_model
+    
+    if not ordering:
+        return forced
+
+    is_pro_keywords = ["pro", "coder", "r1", "reasoning", "k2.6", "next"]
+    
+    # Filter ordering by availability if we have the list
+    candidates = ordering
+    if _available_models:
+        candidates = [m for m in ordering if m in _available_models]
+        if not candidates:
+            log.warning("None of the models in OLLAMA_MODELS_ORDERING are available on the host! Falling back to defaults.")
+            return forced
+
+    if use_pro:
+        # Find first pro model in candidates
+        for m in candidates:
+            m_lower = m.lower()
+            if any(kw in m_lower for kw in is_pro_keywords):
+                return m
+        return candidates[0]
+    else:
+        # Find first flash model in candidates (prefers 'flash' in name, or just not pro)
+        for m in candidates:
+            m_lower = m.lower()
+            if "flash" in m_lower:
+                return m
+        for m in candidates:
+            m_lower = m.lower()
+            if not any(kw in m_lower for kw in is_pro_keywords):
+                return m
+        return candidates[0]
 
 
 def _create_llm(model_name: str | None = None, **kwargs) -> Any:
@@ -93,22 +178,26 @@ def get_agent(use_pro: bool = False) -> Any:
     
     if use_pro:
         if _agent_pro is None:
+            model_pro = _resolve_model(use_pro=True)
+            
             llm = _create_llm(
-                model_name=CONFIG.ollama_model_pro,
+                model_name=model_pro,
                 reasoning=True,
-                temperature=0.7,
-                num_ctx=16384,
-                num_predict=2048,
+                temperature=0.6, # Lower temp for coding accuracy
+                num_ctx=32768,   # Larger context for code
+                num_predict=4096,
                 keep_alive=CONFIG.ollama_keep_alive,
                 streaming=True,
             )
             _agent_pro = create_react_agent(model=llm, tools=ALL_TOOLS)
-            log.info("Pro Agent ready: model=%s", CONFIG.ollama_model_pro)
+            log.info("Pro Agent (The Best Model): model=%s", model_pro)
         return _agent_pro
     else:
         if _agent_flash is None:
+            model_flash = _resolve_model(use_pro=False)
+            
             llm = _create_llm(
-                model_name=CONFIG.ollama_model,
+                model_name=model_flash,
                 reasoning=True,
                 temperature=0.8,
                 num_ctx=8192,
@@ -117,7 +206,7 @@ def get_agent(use_pro: bool = False) -> Any:
                 streaming=True,
             )
             _agent_flash = create_react_agent(model=llm, tools=ALL_TOOLS)
-            log.info("Flash Agent ready: model=%s", CONFIG.ollama_model)
+            log.info("Flash Agent active (Best for Chat): model=%s", model_flash)
         return _agent_flash
 
 
@@ -248,11 +337,12 @@ async def stream_reply(
     """Yield text chunks via ReAct agent streaming. 
     Switches to Pro model if technical task is detected.
     """
-    # Simple intent detection for Pro model
+    # Expanded intent detection for Pro models (DeepSeek/Qwen/Llama3.3)
     tech_keywords = [
         "code", "coding", "script", "python", "bash", "shell", "terminal", 
         "file", "folder", "directory", "debug", "error", "fix", "ram", "cpu", 
-        "disk", "system", "install", "git", "buatkan", "bikin", "tulis"
+        "disk", "system", "install", "git", "buatkan", "bikin", "tulis",
+        "analisis", "hitung", "logic", "algoritma", "database", "sql", "api"
     ]
     is_tech = any(kw in user_text.lower() for kw in tech_keywords)
     
