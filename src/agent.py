@@ -32,6 +32,9 @@ TECHNICAL/CODING MODE:
 If the user asks for coding, debugging, or system tasks, you switch to 'Expert Dev Mode'. 
 Maintain your personality but prioritize technical accuracy and successful execution. 
 You can read files to understand the project, write code, and run it to verify results.
+
+IMPORTANT: Do NOT use any <thought> tags or reasoning blocks in your response. 
+If you need to call a tool, do it directly.
 """
 
 
@@ -57,7 +60,7 @@ def get_agent() -> Any:
     global _agent
     if _agent is None:
         llm = _create_llm(
-            reasoning=True,
+            reasoning=False,
             temperature=0.8,
             num_ctx=4096,
             num_predict=512,
@@ -80,7 +83,7 @@ def get_vision_llm() -> ChatOllama:
     global _llm_vision
     if _llm_vision is None:
         _llm_vision = _create_llm(
-            reasoning=True,
+            reasoning=False,
             temperature=0.8,
             num_ctx=4096,
             num_predict=512,
@@ -243,7 +246,7 @@ def _get_extract_llm() -> ChatOllama:
     global _llm_extract
     if _llm_extract is None:
         _llm_extract = _create_llm(
-            reasoning=True,
+            reasoning=False,
             temperature=0.2,
             num_ctx=2048,
             num_predict=120,
