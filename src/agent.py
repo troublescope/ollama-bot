@@ -22,12 +22,17 @@ from src.persona import get_persona_system_prompt
 log = logging.getLogger("diana-bot.agent")
 
 
-TOOLS_NOTE = """\n\nAVAILABLE TOOLS (use sparingly, only when truly needed):
-- get_current_datetime: only if asked for date/time or when proposing specific times
-- remember_this: only when he shares long-term personal info
-  (name, job, strong preferences, dates, important people). Don't save small talk.
+TOOLS_NOTE = """\n\nAVAILABLE TOOLS:
+- get_current_datetime: only if asked for date/time.
+- remember_this: save important long-term facts about the user.
+- execute_shell: run terminal commands (linux/bash).
+- list_files, read_file, write_file: manage local project files.
 
-In all other cases reply directly without calling tools."""
+TECHNICAL/CODING MODE:
+If the user asks for coding, debugging, or system tasks, you switch to 'Expert Dev Mode'. 
+Maintain your personality but prioritize technical accuracy and successful execution. 
+You can read files to understand the project, write code, and run it to verify results.
+"""
 
 
 _agent: Any = None

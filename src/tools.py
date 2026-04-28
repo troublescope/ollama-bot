@@ -4,6 +4,8 @@ Tools access the Memory instance through a global singleton set at bot
 startup (set_memory()). This avoids passing dynamic state through the
 ReAct signatures, which don't handle runtime parameters well.
 """
+import subprocess
+import os
 from datetime import datetime
 from typing import Optional
 from langchain_core.tools import tool
@@ -56,4 +58,53 @@ def remember_this(fact: str) -> str:
     return f"ok, remembered: {fact.strip()}"
 
 
-ALL_TOOLS = [get_current_datetime, remember_this]
+@tool
+def execute_shell(command: str) -> str:
+    """Execute a shell command in the local environment and return output.
+    USE EXTREME CAUTION. Only use when asked to run code, check system,
+    or perform technical tasks.
+    """
+    try:
+        result = subprocess.run(
+            command, shell=True, capture_output=True, text=True, timeout=30
+        )
+        out = result.stdout or ""
+        err = result.stderr or ""
+        return f"STDOUT:\n{out}\nSTDERR:\n{err}" if (out or err) else "Command finished (no output)"
+    except Exception as e:
+        return f"Error executing command: {str(e)}"
+
+
+@tool
+def list_files(path: str = ".") -> str:
+    """List files in a directory."""
+    try:
+        files = os.listdir(path)
+        return "\n".join(files) if files else "Directory is empty"
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
+@tool
+def read_file(file_path: str) -> str:
+    """Read content of a file."""
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
+@tool
+def write_file(file_path: str, content: str) -> str:
+    """Write or overwrite a file with content."""
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(file_path)), exist_ok=True)
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return f"Successfully written to {file_path}"
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+
+ALL_TOOLS = [get_current_datetime, remember_this, execute_shell, list_files, read_file, write_file]
