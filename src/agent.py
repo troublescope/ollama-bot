@@ -11,6 +11,7 @@ import asyncio
 import logging
 from typing import Any
 from langchain_ollama import ChatOllama
+from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, ToolMessage, BaseMessage
 from langgraph.prebuilt import create_react_agent
 
@@ -36,11 +37,40 @@ You can read files to understand the project, write code, and run it to verify r
 
 
 _agent: Any = None
-_llm_vision: ChatOllama | None = None
+_llm_vision: Any = None
 
 
-def _create_llm(**kwargs) -> ChatOllama:
-    """Helper to create a ChatOllama instance with optional cloud auth headers."""
+def _create_llm(**kwargs) -> Any:
+    """Helper to create an LLM instance. Uses ChatOpenAI for cloud providers
+    (like Gemini on Ollama Cloud) because it handles thought signatures 
+    and tool calling much more reliably than ChatOllama.
+    """
+    host = CONFIG.ollama_host.lower()
+    is_cloud = "ollama.com" in host or ("localhost" not in host and "127.0.0.1" not in host)
+    
+    if is_cloud:
+        # For OpenAI-compatible cloud endpoints
+        api_base = CONFIG.ollama_host
+        if not api_base.endswith("/v1") and not api_base.endswith("/v1/"):
+            api_base = f"{api_base.rstrip('/')}/v1"
+            
+        log.info("Using ChatOpenAI (cloud mode) base: %s", api_base)
+        
+        # Clean up kwargs for ChatOpenAI
+        # ChatOpenAI uses 'max_tokens' instead of 'num_predict'
+        # and doesn't support 'reasoning' or 'keep_alive'
+        openai_kwargs = {k: v for k, v in kwargs.items() if k not in ["reasoning", "keep_alive", "num_predict"]}
+        if "num_predict" in kwargs:
+            openai_kwargs["max_tokens"] = kwargs["num_predict"]
+
+        return ChatOpenAI(
+            model=CONFIG.ollama_model,
+            openai_api_base=api_base,
+            openai_api_key=CONFIG.ollama_api_key or "no-key",
+            **openai_kwargs
+        )
+
+    log.info("Using ChatOllama (local mode)")
     client_kwargs = {}
     if CONFIG.ollama_api_key:
         client_kwargs["headers"] = {"Authorization": f"Bearer {CONFIG.ollama_api_key}"}
@@ -73,7 +103,7 @@ def get_agent() -> Any:
     return _agent
 
 
-def get_vision_llm() -> ChatOllama:
+def get_vision_llm() -> Any:
     """Direct LLM (no ReAct) for the vision path: avoids the doubled latency
     that ReAct would add on top of an already heavy image payload.
     """
@@ -234,21 +264,22 @@ If the message contains NO relevant personal facts, reply exactly with: NONE
 
 No other explanation, no bullet points, just the list or NONE."""
 
+_llm_extract: Any = None
 
-_llm_extract: ChatOllama | None = None
 
-
-def _get_extract_llm() -> ChatOllama:
+def _get_extract_llm() -> Any:
     """Minimal dedicated LLM for fact extraction (low num_predict for speed)."""
     global _llm_extract
     if _llm_extract is None:
         _llm_extract = _create_llm(
+            reasoning=True,
             temperature=0.2,
             num_ctx=2048,
             num_predict=120,
             keep_alive=CONFIG.ollama_keep_alive,
         )
     return _llm_extract
+
 
 
 async def extract_facts(user_text: str, timeout_s: float = 90.0) -> list[str]:
