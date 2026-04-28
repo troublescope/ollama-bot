@@ -55,7 +55,7 @@ def get_agent() -> Any:
             reasoning=False,
             temperature=0.8,
             num_ctx=4096,
-            num_predict=150,
+            num_predict=512,
             keep_alive=CONFIG.ollama_keep_alive,
             streaming=True,
         )
@@ -78,7 +78,7 @@ def get_vision_llm() -> ChatOllama:
             reasoning=False,
             temperature=0.8,
             num_ctx=4096,
-            num_predict=180,
+            num_predict=512,
             keep_alive=CONFIG.ollama_keep_alive,
             streaming=True,
         )
