@@ -63,6 +63,38 @@ def _authorized(update: Update) -> bool:
     return True
 
 
+def _is_addressed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """True if the bot is in a private chat, or mentioned/replied to in a group."""
+    msg = update.message
+    if not msg:
+        return False
+
+    # Always respond in private chats
+    if msg.chat.type == "private":
+        return True
+
+    # Respond if the bot is mentioned
+    bot_username = context.bot.username
+    if bot_username:
+        text = msg.text or msg.caption or ""
+        # Quick check
+        if f"@{bot_username}" in text:
+            return True
+        # Robust check via entities
+        entities = (msg.entities or []) + (msg.caption_entities or [])
+        for ent in entities:
+            if ent.type == "mention":
+                mention_text = text[ent.offset : ent.offset + ent.length]
+                if mention_text.lower() == f"@{bot_username}".lower():
+                    return True
+
+    # Respond if it's a reply to one of the bot's messages
+    if msg.reply_to_message and msg.reply_to_message.from_user.id == context.bot.id:
+        return True
+
+    return False
+
+
 async def _keepalive_typing(bot, chat_id: int, stop: asyncio.Event) -> None:
     try:
         while not stop.is_set():
@@ -651,6 +683,8 @@ def _photo_refusal_message(reason: str) -> str:
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _authorized(update):
         return
+    if not _is_addressed(update, context):
+        return
     msg = update.message
     user_text = msg.text or ""
     log.info("TEXT from chat_id=%s: %s", msg.chat_id, user_text)
@@ -689,6 +723,8 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     the text through the same flow as on_text. Photo regexes, agent reply,
     memory, intimacy, etc. all just work on voice input."""
     if not _authorized(update):
+        return
+    if not _is_addressed(update, context):
         return
     if not CONFIG.stt_enabled:
         await update.message.reply_text(
@@ -909,6 +945,8 @@ def _pick_reference_b64() -> str | None:
 
 async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _authorized(update):
+        return
+    if not _is_addressed(update, context):
         return
     msg = update.message
     caption = (msg.caption or "").strip()
