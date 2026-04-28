@@ -21,32 +21,38 @@ from src.persona import get_persona_system_prompt
 
 
 log = logging.getLogger("diana-bot.agent")
-
-
 TOOLS_NOTE = """\n\nAVAILABLE TOOLS:
 - get_current_datetime: only if asked for date/time.
 - remember_this: save important long-term facts about the user.
 - execute_shell: run terminal commands (linux/bash).
 - list_files, read_file, write_file: manage local project files.
+- send_telegram_file: send any local file/document to the user via Telegram.
+- generate_and_send_photo: use AI to generate and send a photo to the user.
 
 TECHNICAL/CODING MODE:
+...
+"""
+
 If the user asks for coding, debugging, or system tasks, you switch to 'Expert Dev Mode'. 
 Maintain your personality but prioritize technical accuracy and successful execution. 
 You can read files to understand the project, write code, and run it to verify results.
 """
 
 
-_agent: Any = None
+_agent_flash: Any = None
+_agent_pro: Any = None
 _llm_vision: Any = None
 
 
-def _create_llm(**kwargs) -> Any:
+def _create_llm(model_name: str | None = None, **kwargs) -> Any:
     """Helper to create an LLM instance. Uses ChatOpenAI for cloud providers
     (like Gemini on Ollama Cloud) because it handles thought signatures 
     and tool calling much more reliably than ChatOllama.
     """
     host = CONFIG.ollama_host.lower()
     is_cloud = "ollama.com" in host or ("localhost" not in host and "127.0.0.1" not in host)
+    
+    target_model = model_name or CONFIG.ollama_model
     
     if is_cloud:
         # For OpenAI-compatible cloud endpoints
@@ -60,46 +66,59 @@ def _create_llm(**kwargs) -> Any:
         if "num_predict" in kwargs:
             openai_kwargs["max_tokens"] = kwargs["num_predict"]
             
-        log.info("Using ChatOpenAI (cloud mode) base: %s, kwargs: %s", api_base, list(openai_kwargs.keys()))
+        log.info("Using ChatOpenAI (cloud mode) base: %s, model: %s", api_base, target_model)
 
         return ChatOpenAI(
-            model=CONFIG.ollama_model,
+            model=target_model,
             openai_api_base=api_base,
             openai_api_key=CONFIG.ollama_api_key or "no-key",
             **openai_kwargs
         )
 
-    log.info("Using ChatOllama (local mode)")
+    log.info("Using ChatOllama (local mode) model: %s", target_model)
     client_kwargs = {}
     if CONFIG.ollama_api_key:
         client_kwargs["headers"] = {"Authorization": f"Bearer {CONFIG.ollama_api_key}"}
 
     return ChatOllama(
-        model=CONFIG.ollama_model,
+        model=target_model,
         base_url=CONFIG.ollama_host,
         client_kwargs=client_kwargs,
         **kwargs
     )
 
 
-def get_agent() -> Any:
-    global _agent
-    if _agent is None:
-        llm = _create_llm(
-            reasoning=True,
-            temperature=0.8,
-            num_ctx=8192,
-            num_predict=1024,
-            keep_alive=CONFIG.ollama_keep_alive,
-            streaming=True,
-        )
-        _agent = create_react_agent(model=llm, tools=ALL_TOOLS)
-        log.info(
-            "ReAct agent ready: model=%s tools=%s",
-            CONFIG.ollama_model,
-            [t.name for t in ALL_TOOLS],
-        )
-    return _agent
+def get_agent(use_pro: bool = False) -> Any:
+    global _agent_flash, _agent_pro
+    
+    if use_pro:
+        if _agent_pro is None:
+            llm = _create_llm(
+                model_name=CONFIG.ollama_model_pro,
+                reasoning=True,
+                temperature=0.7,
+                num_ctx=16384,
+                num_predict=2048,
+                keep_alive=CONFIG.ollama_keep_alive,
+                streaming=True,
+            )
+            _agent_pro = create_react_agent(model=llm, tools=ALL_TOOLS)
+            log.info("Pro Agent ready: model=%s", CONFIG.ollama_model_pro)
+        return _agent_pro
+    else:
+        if _agent_flash is None:
+            llm = _create_llm(
+                model_name=CONFIG.ollama_model,
+                reasoning=True,
+                temperature=0.8,
+                num_ctx=8192,
+                num_predict=1024,
+                keep_alive=CONFIG.ollama_keep_alive,
+                streaming=True,
+            )
+            _agent_flash = create_react_agent(model=llm, tools=ALL_TOOLS)
+            log.info("Flash Agent ready: model=%s", CONFIG.ollama_model)
+        return _agent_flash
 
 
 def get_vision_llm() -> Any:
@@ -226,8 +245,19 @@ async def stream_reply(
     intimacy_count: int | None = None,
     events: list[dict] | None = None,
 ):
-    """Yield text chunks via ReAct agent streaming."""
-    agent = get_agent()
+    """Yield text chunks via ReAct agent streaming. 
+    Switches to Pro model if technical task is detected.
+    """
+    # Simple intent detection for Pro model
+    tech_keywords = [
+        "code", "coding", "script", "python", "bash", "shell", "terminal", 
+        "file", "folder", "directory", "debug", "error", "fix", "ram", "cpu", 
+        "disk", "system", "install", "git", "buatkan", "bikin", "tulis"
+    ]
+    is_tech = any(kw in user_text.lower() for kw in tech_keywords)
+    
+    agent = get_agent(use_pro=is_tech)
+    
     system = _build_system_prompt(
         facts or [], summary, with_tools=True,
         daily_mood=daily_mood, intimacy_count=intimacy_count,
@@ -237,7 +267,8 @@ async def stream_reply(
     msgs.extend(_history_to_messages(history or []))
     msgs.append(HumanMessage(content=user_text))
 
-    log.debug("Agent stream request: msgs=%d user=%r", len(msgs), user_text)
+    log.debug("Agent stream request (%s): msgs=%d user=%r", 
+              "PRO" if is_tech else "FLASH", len(msgs), user_text)
 
     async for chunk in agent.astream({"messages": msgs}, stream_mode="messages"):
         msg, metadata = chunk

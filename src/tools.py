@@ -7,13 +7,16 @@ ReAct signatures, which don't handle runtime parameters well.
 import subprocess
 import os
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Any
 from langchain_core.tools import tool
+from telegram import Bot
 
 from src.memory import Memory
 
 
 _memory: Optional[Memory] = None
+_bot: Optional[Bot] = None
+_chat_id: Optional[int] = None
 
 
 def set_memory(m: Memory) -> None:
@@ -21,10 +24,22 @@ def set_memory(m: Memory) -> None:
     _memory = m
 
 
+def set_bot_context(bot: Bot, chat_id: int) -> None:
+    global _bot, _chat_id
+    _bot = bot
+    _chat_id = chat_id
+
+
 def _require_memory() -> Memory:
     if _memory is None:
         raise RuntimeError("Memory not initialized. Call set_memory() at startup.")
     return _memory
+
+
+def _require_bot():
+    if _bot is None or _chat_id is None:
+        raise RuntimeError("Bot context not initialized. Call set_bot_context() at startup.")
+    return _bot, _chat_id
 
 
 @tool
@@ -107,4 +122,66 @@ def write_file(file_path: str, content: str) -> str:
         return f"Error: {str(e)}"
 
 
-ALL_TOOLS = [get_current_datetime, remember_this, execute_shell, list_files, read_file, write_file]
+@tool
+async def send_telegram_file(file_path: str, caption: str = "") -> str:
+    """Send a file (document) to the user via Telegram. 
+    Use this to share generated scripts, data, or any local files.
+    """
+    bot, chat_id = _require_bot()
+    if not os.path.exists(file_path):
+        return f"Error: File {file_path} not found."
+    
+    try:
+        with open(file_path, "rb") as f:
+            await bot.send_document(chat_id=chat_id, document=f, caption=caption)
+        return f"Successfully sent {file_path} to the user."
+    except Exception as e:
+        return f"Error sending file: {str(e)}"
+
+
+@tool
+async def generate_and_send_photo(prompt: str) -> str:
+    """Generate an image using AI and send it to the user immediately.
+    The prompt should be in English, describing the scene (e.g., 'wearing a red dress, in a cafe').
+    This is the best way to show yourself or any scene.
+    """
+    bot, chat_id = _require_bot()
+    from src.pic_flow import run_pic_flow, can_send_pic
+    from src.persona import ensure_today_mood
+    from src.memory import AsyncMemory
+    
+    amem = AsyncMemory(_require_memory())
+    ok, reason = await can_send_pic(amem)
+    if not ok:
+        return f"Cannot generate photo right now: {reason}"
+    
+    mood = await ensure_today_mood(amem)
+    
+    try:
+        # We use 'manual' trigger type for tool-based generation
+        caption = await run_pic_flow(
+            bot=bot,
+            amem=amem,
+            chat_id=chat_id,
+            trigger_type="manual",
+            explicit_prompt=prompt,
+            mood=mood
+        )
+        if caption:
+            return f"Photo successfully generated and sent with caption: {caption}"
+        else:
+            return "Photo generation failed or was cancelled."
+    except Exception as e:
+        return f"Error in photo generation tool: {str(e)}"
+
+
+ALL_TOOLS = [
+    get_current_datetime, 
+    remember_this, 
+    execute_shell, 
+    list_files, 
+    read_file, 
+    write_file,
+    send_telegram_file,
+    generate_and_send_photo
+]

@@ -17,7 +17,7 @@ from PIL import Image
 from src.config import CONFIG
 from src.agent import stream_reply, stream_vision_reply, extract_facts
 from src.memory import Memory, AsyncMemory
-from src.tools import set_memory
+from src.tools import set_memory, set_bot_context
 from src.scheduler import maybe_send_autonomous, force_send_autonomous
 from src.persona import (
     ensure_today_mood, get_visual_prompt_prefix, pick_visual_shot_type,
@@ -1109,6 +1109,9 @@ def build_app() -> Application:
         .build()
     )
     app.bot_data["memory"] = amem
+    
+    # Inject context for tools (single-user bot)
+    set_bot_context(app.bot, CONFIG.allowed_chat_id)
 
     app.add_handler(CommandHandler("start", on_start))
     app.add_handler(CommandHandler("help", on_help))
