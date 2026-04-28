@@ -54,14 +54,13 @@ def _create_llm(**kwargs) -> Any:
         if not api_base.endswith("/v1") and not api_base.endswith("/v1/"):
             api_base = f"{api_base.rstrip('/')}/v1"
             
-        log.info("Using ChatOpenAI (cloud mode) base: %s", api_base)
-        
-        # Clean up kwargs for ChatOpenAI
         # ChatOpenAI uses 'max_tokens' instead of 'num_predict'
-        # and doesn't support 'reasoning' or 'keep_alive'
-        openai_kwargs = {k: v for k, v in kwargs.items() if k not in ["reasoning", "keep_alive", "num_predict"]}
+        # and doesn't support 'reasoning', 'keep_alive', 'num_ctx'
+        openai_kwargs = {k: v for k, v in kwargs.items() if k not in ["reasoning", "keep_alive", "num_predict", "num_ctx"]}
         if "num_predict" in kwargs:
             openai_kwargs["max_tokens"] = kwargs["num_predict"]
+            
+        log.info("Using ChatOpenAI (cloud mode) base: %s, kwargs: %s", api_base, list(openai_kwargs.keys()))
 
         return ChatOpenAI(
             model=CONFIG.ollama_model,
